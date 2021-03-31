@@ -1,0 +1,48 @@
+I have created an EC2 instance Access it from putty. Following commands are fired
+-> ec2-user
+-> sudo su
+-> yum update -y
+-> yum install docker -y
+-> service docker status
+-> service docker start
+-> docker run -it --name container1 ubuntu /bin/bash
+-> exit
+
+-> mkdir phpdocker
+-> In phpdocker directory i have created one PHP and Docker file using vi editor
+-> index.php :
+
+ <?php  
+    echo ?Hello, Php?;  
+ ?>  
+-> Docker :
+
+FROM php:7.0-apache  
+COPY . /var/www/php  
+
+-> After that i create the docker image
+
+ docker build -t myimage . 
+
+-> image is created or not we can check this using  command : docker images
+-> After that run the image to create container
+
+docker run -it --name mycontainer myimage /bin/bash
+
+Now if we type our ec2 instance public ip in browser we can see the output
+
+output : This is php file 
+
+exit
+
+EFS mount following commands are fire:
+ 
+-> sudo yum install -y amazon-efs-utils
+-> sudo mkdir efs
+-> sudo mount -t efs -o tls fs-cdcf108d:/ /mnt/efs
+
+
+
+
+
+
