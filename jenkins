@@ -1,0 +1,149 @@
+import requests # type: ignore
+import time
+import os
+import re
+ 
+def trigger_jenkins_build(jenkins_url, job_name, branch_name, username, api_token, params=None):
+    try:
+        # Build the correct URL for parameterized builds
+        if params:
+            trigger_url = f'{jenkins_url}/job/{job_name}/job/{branch_name}/buildWithParameters'
+        else:
+            trigger_url = f'{jenkins_url}/job/{job_name}/job/{branch_name}/build'
+
+        # Send the build request with parameters if provided
+        response = requests.post(trigger_url, auth=(username, api_token), params=params)
+
+        if response.status_code != 201:
+            return None, None, None, f'Failed to trigger build. Status Code: {response.status_code}. Response: {response.text}'
+
+        # Get queue item URL from the Location header
+        queue_url = response.headers['Location'] + 'api/json'
+        print('Build triggered successfully. Queue URL:', queue_url)
+
+        # Poll the queue to get the build number
+        while True:
+            queue_response = requests.get(queue_url, auth=(username, api_token))
+            queue_data = queue_response.json()
+
+            if 'executable' in queue_data:
+                build_number = queue_data['executable']['number']
+                print('Build number:', build_number)
+                break
+            else:
+                print('Build not yet started. Checking again in 5 seconds...')
+                time.sleep(5)
+
+        # Check the build status and get stage details
+        build_url = f'{jenkins_url}/job/{job_name}/job/{branch_name}/{build_number}/api/json'
+        while True:
+            build_response = requests.get(build_url, auth=(username, api_token))
+            build_data = build_response.json()
+
+            if build_data['building']:
+                print('Build is still in progress. Checking again in 10 seconds...')
+                time.sleep(10)
+            else:
+                build_result = build_data['result']
+                print('Build finished with status:', build_result)
+                break
+
+        # Get stage details
+        stages_url = f'{jenkins_url}/job/{job_name}/job/{branch_name}/{build_number}/wfapi/describe'
+        stages_response = requests.get(stages_url, auth=(username, api_token))
+        stages_data = stages_response.json()
+
+        # Generate HTML table for email
+        total_time = 0
+        table_rows = ""
+        for stage in stages_data['stages']:
+            stage_name = stage['name']
+            stage_status = stage['status']
+            stage_duration = stage['durationMillis']
+            total_time += stage_duration
+
+            table_rows += f"""
+            <tr>
+                <td>{stage_name}</td>
+                <td>{stage_status}</td>
+                <td>{stage_duration / 1000:.2f} seconds</td>
+            </tr>"""
+
+        total_time_seconds = total_time / 1000
+        html_table = f"""
+        <html>
+        <body>
+            <b1>Branch: {branch_name}</b1><br>
+            <table border="1" cellpadding="5" cellspacing="0">
+                <tr>
+                    <th>Stage</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                </tr>
+                {table_rows}
+                <tr>
+                    <td colspan="2"><strong>Total Time</strong></td>
+                    <td><strong>{total_time_seconds:.2f} seconds</strong></td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        """
+
+        return build_result, html_table, build_number, None
+
+    except requests.exceptions.RequestException as e:
+        # Handle any requests exceptions and return the error message
+        error_message = f"An error occurred while making a request: {str(e)}"
+        return None, None, None, error_message
+    
+def get_jenkins_build_logs(jenkins_url, job_name, branch_name, build_number, username, api_token):
+    try:
+        # URL to get the console log of the specified build
+        log_url = f'{jenkins_url}/job/{job_name}/job/{branch_name}/{build_number}/consoleText'
+        
+        # Send request to get the logs
+        response = requests.get(log_url, auth=(username, api_token))
+        
+        # Check if the request was successful
+        if response.status_code == 200:
+            logs = response.text
+ 
+            # Define the file name and path
+            file_name = f"{job_name}_{branch_name}_build_{build_number}.txt"
+            folder_name = "Failed_Deployment_logs"
+            os.makedirs(folder_name, exist_ok=True)
+            file_path = os.path.join(os.getcwd(), folder_name, file_name)
+ 
+            # Write logs to the file
+            with open(file_path, 'w') as log_file:
+                log_file.write(logs)
+            
+            return file_path, None
+        else:
+            return None, f'Failed to retrieve logs. Status Code: {response.status_code}. Response: {response.text}'
+
+    except requests.exceptions.RequestException as e:
+        # Handle any requests exceptions and return the error message
+        error_message = f"An error occurred while making a request: {str(e)}"
+        return None, error_message
+    
+def get_package_name_from_log(jenkins_url, job_name, branch_name, build_number, username, api_token):
+    try:
+        # URL to get the console log of the specified build
+        log_url = f'{jenkins_url}/job/{job_name}/job/{branch_name}/{build_number}/consoleText'
+        
+        # Send request to get the logs
+        response = requests.get(log_url, auth=(username, api_token))
+        
+        # Check if the request was successful
+        if response.status_code == 200:
+            logs = response.text
+            pattern = r"Deploying Package:\s*(.*)"
+            match = re.search(pattern, logs)
+        if match:
+            return match.group(1)  # Assuming the value is captured in group 1
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching Jenkins logs: {e}")
+        return None
